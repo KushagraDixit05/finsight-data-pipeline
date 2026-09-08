@@ -241,3 +241,56 @@ A running PostgreSQL database with all 7 tables, seeded lookup data, and every c
 ## Dependencies / Next Phase
 
 `09-ingestion-scheduler.md` uses `repository.py`'s `get_last_successful_run()` to compute the "new news" overlap window, and `insert_article()`/`log_ingestion_run()` to persist results.
+
+---
+
+## ⚡ Actual Implementation Note (as-built)
+
+> **The following reflects what is currently implemented in `models.py` and supersedes the 7-table design above for the active feature build.**
+
+### Actual schema: single `articles` table
+
+The live database uses **one table** (not seven). The equivalent DDL of what SQLAlchemy creates via `Base.metadata.create_all()` is:
+
+```sql
+CREATE TABLE articles (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR,
+    content         TEXT,
+    source          VARCHAR,
+    published_time  TIMESTAMP DEFAULT NOW(),
+    url             VARCHAR UNIQUE,       -- Level-1 dedup constraint
+
+    -- NLP & KG fields (populated by processing pipeline, NULL at insert time)
+    sector          VARCHAR,
+    confidence_score FLOAT,
+    entities        JSON,                 -- [{text, category}] from NER
+    processed       BOOLEAN DEFAULT FALSE,
+    qdrant_point_id VARCHAR
+);
+
+-- Indexes (created by SQLAlchemy index=True)
+CREATE INDEX ix_articles_id             ON articles (id);
+CREATE INDEX ix_articles_title          ON articles (title);
+CREATE INDEX ix_articles_source         ON articles (source);
+CREATE INDEX ix_articles_published_time ON articles (published_time);
+CREATE UNIQUE INDEX ix_articles_url     ON articles (url);
+CREATE INDEX ix_articles_sector         ON articles (sector);
+CREATE INDEX ix_articles_processed      ON articles (processed);
+```
+
+**Key differences from the 7-table plan:**
+- No `news_sources`, `news_categories`, `news_entities`, `news_article_entities`, `news_topics`, `news_article_topics`, or `news_ingestion_logs` tables.
+- `id` is `SERIAL` (integer), not `UUID`.
+- `source` and `sector` are plain `VARCHAR`, not foreign keys into lookup tables.
+- `entities` is a `JSON` column on the article row (not a normalized entity table + junction).
+- No `content_hash`, `canonical_url`, `fetched_at`, `duplicate_of_id`, `importance`, `tickers`, `companies`, `sentiment`, `raw_payload_ref`, `language`, or `country` columns.
+- No `news_article_embeddings` table — vector embeddings are stored externally in **Qdrant**, with `qdrant_point_id` on the article row as the join key.
+
+### Repository layer
+
+Ingestion and querying are implemented directly in `services.py` (no separate `repository.py`):
+- `store_articles(db, articles)` — URL-dedup check + bulk insert.
+- `seed_sample_news_if_empty(db)` — seeds 5 hardcoded articles when table is empty.
+- `process_unprocessed_articles(db)` — queries `processed == False`, runs full NLP/KG pipeline, updates article row in-place.
+- `search_articles_semantic(db, query, ...)` — queries Qdrant first, falls back to PostgreSQL ILIKE search.

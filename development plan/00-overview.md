@@ -254,3 +254,22 @@ See `13-implementation-checklist.md` for the full, ordered checklist covering al
 ## Next
 
 Start with `01-news-classification.md`.
+
+---
+
+## ⚡ As-Built Summary (current state of implementation)
+
+> This section captures the key divergences between the original plan and what is currently built. Each point links back to the phase file where the full as-built note lives.
+
+| Plan decision | As-built reality | Phase |
+|---|---|---|
+| 4 providers: Marketaux, Finnhub, NewsData.io, GDELT | 2 providers: **Finnhub** (implemented) + **NewsAPI** (implemented, dev-only tier) | `02-api-selection.md` |
+| Canonical `NewsArticle` with 15+ fields, UUID id, 7-category enum, `fetched_at`, `content_hash` | Simple `ArticleCreate` with 5 fields (`title`, `source`, `published_time`, `url`, `content`); `Article` adds NLP fields post-processing | `04-canonical-data-model.md` |
+| 7-table PostgreSQL schema with lookup tables, junction tables, ingestion logs | **Single `articles` table** with integer PK, URL unique constraint, NLP fields on the same row | `08-postgresql-schema.md` |
+| 3-level dedup: canonical_url + source+ID + content_hash constraints | **Level-1 URL match only**: application-layer `filter(url == ...)` + `url UNIQUE` DB index | `07-deduplication.md` |
+| pgvector inside PostgreSQL for embeddings | **External Qdrant** instance; 1024-dim BGE-Large vectors; `qdrant_point_id` stored on article row | `10-vector-db-integration.md` |
+| Embedding-only processing step | **Full NLP pipeline**: BGE-Large embedding → sector classification → NER → relation extraction → Qdrant upsert → KG node/edge/similarity wiring | `10-vector-db-integration.md` |
+| Cron + PostgreSQL advisory lock + `news_ingestion_logs` | **FastAPI endpoint-triggered** ingestion; no advisory lock; no ingestion log table | `09-ingestion-scheduler.md` |
+| `services.py` as part of the formal src/ package | `services.py` lives at the project root alongside `models.py` and `schemas.py` | Architecture |
+
+The above divergences are all **intentional simplifications or feature accelerations** for the MVP build. The original plan remains valid as the target architecture for a production-hardened version. Each phase file's "⚡ Actual Implementation Note" section documents the full detail.

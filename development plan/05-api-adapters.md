@@ -109,3 +109,50 @@ Given a sample response from each provider, each adapter produces a valid `NewsA
 ## Dependencies / Next Phase
 
 `06-normalization-validation.md` cleans and validates the `NewsArticle` objects the collector returns.
+
+---
+
+## ⚡ Actual Implementation Note (as-built)
+
+> **The following reflects what is currently implemented in `services.py` and supersedes the abstract provider list above for the active feature build.**
+
+### Active providers
+
+The live pipeline uses **two** providers (not four), both called directly in `services.py`:
+
+| Provider | Function | API endpoint | Notes |
+|---|---|---|---|
+| **Finnhub** | `fetch_finnhub_news()` | `/api/v1/news?category=general` | Uses `FINNHUB_API_KEY`. Fetches up to 15 general market news items. Falls back to empty list gracefully if key is missing. |
+| **NewsAPI** | `fetch_newsapi_news()` | `/v2/top-headlines?category=business&country=us` | Uses `NEWSAPI_KEY`. Fetches up to 15 US business headlines. Falls back gracefully if key is missing. |
+
+Marketaux, NewsData.io, and GDELT are **not yet implemented**. A third function, `fetch_historical_news()`, calls the NewsAPI `/v2/everything` endpoint across 6 macro/sector keyword topics to seed historical data.
+
+### Field mapping (both adapters → `ArticleCreate`)
+
+```python
+# Finnhub mapping
+ArticleCreate(
+    title=item["headline"],
+    content=item.get("summary", ""),
+    source=item.get("source", "Finnhub"),
+    published_time=datetime.fromtimestamp(item["datetime"]),  # unix seconds → datetime
+    url=item["url"]
+)
+
+# NewsAPI mapping
+ArticleCreate(
+    title=item["title"],
+    content=item.get("description") or item.get("title", ""),
+    source=item["source"]["name"],
+    published_time=datetime.fromisoformat(item["publishedAt"].replace('Z', '+00:00')).replace(tzinfo=None),
+    url=item["url"]
+)
+```
+
+### Fallback / seed data
+
+`SAMPLE_FINANCIAL_NEWS` (5 hardcoded articles covering oil, airlines, semiconductors, Fed rates, shipping) seeds the database via `seed_sample_news_if_empty()` when zero articles exist — ensuring the pipeline is demo-able without live API keys.
+
+### Storage function
+
+`store_articles(db, articles)` deduplicates by URL before inserting: if `Article.url` already exists in the database, the record is skipped (no update). This implements **Level-1 dedup only** (URL match) — applied at the application layer against the `url` column, equivalent to the `canonical_url` unique constraint from the plan.

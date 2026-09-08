@@ -144,3 +144,27 @@ A documented, licensing-aware set of 4 active news providers, each mapped to one
 ## Dependencies / Next Phase
 
 `03-architecture.md` designs the pipeline around these 4 providers.
+
+---
+
+## ⚡ Actual Implementation Note (as-built)
+
+> **The following reflects what is currently implemented in `services.py` and supersedes the provider selection table above for the active feature build.**
+
+### Currently implemented providers
+
+| Provider | Plan status | As-built status | Notes |
+|---|---|---|---|
+| **Finnhub** | Selected | ✅ **Implemented** | `fetch_finnhub_news()` — general news endpoint; `FINNHUB_API_KEY` from env |
+| **NewsAPI.org** | ❌ Deferred (dev-only ToS) | ✅ **Implemented** | `fetch_newsapi_news()` + `fetch_historical_news()` — using the free dev tier; `NEWSAPI_KEY` from env. **Production go-live blocker:** the NewsAPI free tier is development-only per its ToS; a paid Business plan ($449/mo) would be required before any production launch |
+| **Marketaux** | Selected | ❌ Not yet implemented | Planned as primary structured source; adapter not yet built |
+| **NewsData.io** | Selected | ❌ Not yet implemented | Planned as India/national source; adapter not yet built |
+| **GDELT** | Selected | ❌ Not yet implemented | Planned as geopolitical source; adapter not yet built |
+
+### NewsAPI dev-tier risk flag
+
+NewsAPI is being used in the active build on its free/developer tier, which per NewsAPI's own Terms of Service is explicitly **not licensed for staging or production** use. This is acceptable during development (the same constraint the plan noted when deferring it) but **must be resolved before any production deployment** — either by subscribing to the NewsAPI Business plan ($449/mo) or by replacing it with Marketaux + NewsData.io adapters, which are already planned.
+
+### Live ticker quotes
+
+`services.py` also implements `fetch_live_ticker_quotes()` — a separate function unrelated to news ingestion that fetches live stock quotes for 9 tickers (SPY, QQQ, NVDA, AAPL, MSFT, AMZN, TSLA, JPM, XOM) from the Finnhub quote endpoint with a 60-second TTL cache and realistic fallback values. This is not part of the news ingestion pipeline and is not covered by the phase plan.

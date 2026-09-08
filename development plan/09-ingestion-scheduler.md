@@ -149,3 +149,39 @@ A single command (`python -m src.news.scheduler.run_ingestion`), safe to run on 
 ## Dependencies / Next Phase
 
 `10-vector-db-integration.md` adds the embedding step, which runs after this job's insert step completes (decoupled, per `03-architecture.md`).
+
+---
+
+## ⚡ Actual Implementation Note (as-built)
+
+> **The following reflects what is currently implemented in `services.py` and the FastAPI application, and supersedes the cron + advisory lock plan above for the active feature build.**
+
+### No cron scheduler — FastAPI endpoint-triggered ingestion
+
+The live pipeline does **not** use cron or a standalone scheduler. Ingestion is triggered via FastAPI API endpoints exposed by the main application:
+
+| Trigger type | Description |
+|---|---|
+| **Manual API call** | `POST /fetch-news` or similar endpoint calls `fetch_finnhub_news()` + `fetch_newsapi_news()`, then `store_articles()`. |
+| **Manual API call** | `POST /process-articles` or similar endpoint calls `process_unprocessed_articles()` to run the NLP/Qdrant/KG pipeline on all unprocessed rows. |
+| **Startup seed** | On app startup, `seed_sample_news_if_empty(db)` runs once to ensure the DB is non-empty for demo purposes. |
+
+### No PostgreSQL advisory lock
+
+No advisory lock is implemented. Concurrent invocations of the processing pipeline are possible — the `processed` boolean column on each article row provides idempotency at the record level: if the endpoint is called twice in parallel, each article will be processed by whichever call wins the race, and the second call will find `processed == True` and skip it. This is safe but not race-condition-free under high concurrency (not a concern at current scale).
+
+### No `news_ingestion_logs` table
+
+The `news_ingestion_logs` table described in this phase does not exist. Per-run statistics (articles fetched, inserted, duplicates) are returned as in-memory response payloads from the API endpoints, not persisted to the database.
+
+### "New news" overlap window
+
+No overlap-window calculation is implemented. Finnhub and NewsAPI adapters always fetch the latest N articles (15 each) without a `since` parameter. The URL-dedup check in `store_articles()` ensures re-fetched articles already in the database are skipped without creating duplicates.
+
+### Error handling
+
+Each fetch function (`fetch_finnhub_news`, `fetch_newsapi_news`, `fetch_historical_news`) wraps its HTTP call in `try/except` and returns an empty list on any error, logging a warning. The calling code does not distinguish between auth errors, rate limits, and network timeouts — all failures result in an empty article list for that provider, and the other provider's articles are still processed normally.
+
+### Rate limits
+
+Rate limits are not explicitly enforced in code. The pipeline relies on the fact that endpoints are called manually (not on an automated 2-hour schedule), keeping API call frequency well within free-tier limits. The `FINNHUB_API_KEY` and `NEWSAPI_KEY` env vars are read from `.env` at startup; if missing or invalid, the adapter returns empty gracefully.

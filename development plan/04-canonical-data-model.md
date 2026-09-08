@@ -132,3 +132,73 @@ A single, importable `NewsArticle` class that is the only object type passed bet
 ## Dependencies / Next Phase
 
 `05-api-adapters.md` builds one adapter per selected provider, each producing a `NewsArticle`.
+
+---
+
+## ⚡ Actual Implementation Note (as-built)
+
+> **The following reflects what is currently implemented in `models.py` and `schemas.py` and supersedes the abstract plan above for the active feature build.**
+
+The live codebase uses a simpler, flatter model reflecting the pipeline's two-phase nature: **ingestion** (raw fields from the provider) and **post-processing** (NLP-enriched fields added after the NLP/KG pipeline runs).
+
+### SQLAlchemy ORM Model (`models.py` — `articles` table)
+
+```python
+class Article(Base):
+    __tablename__ = "articles"
+
+    id = Column(Integer, primary_key=True, index=True)   # auto-increment int, not UUID
+    title = Column(String, index=True)
+    content = Column(Text, nullable=True)
+    source = Column(String, index=True)
+    published_time = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    url = Column(String, unique=True, index=True)         # uniqueness enforced here (Level-1 dedup only)
+
+    # NLP & Knowledge Graph fields — populated post-processing, not at ingestion time
+    sector = Column(String, index=True, nullable=True)           # replaces the 7-value category enum
+    confidence_score = Column(Float, nullable=True)
+    entities = Column(JSON, nullable=True)  # [{text, category}] list set by NER pipeline
+    processed = Column(Boolean, default=False, index=True)       # True once NLP pipeline has run
+    qdrant_point_id = Column(String, nullable=True)              # vector DB reference (Qdrant, not pgvector)
+```
+
+**Key differences from the abstract plan:**
+- `id` is an **integer** primary key, not a UUID.
+- Field is `published_time` (not `published_at`); no `fetched_at` field.
+- No `content_hash`, `canonical_url`, or `duplicate_of_id` columns — URL uniqueness (`url UNIQUE`) is the sole dedup constraint.
+- No separate `news_sources` / `news_categories` lookup tables — `source` and `sector` are plain strings.
+- NLP-derived fields (`sector`, `confidence_score`, `entities`, `processed`, `qdrant_point_id`) live directly on the article row, populated post-insert by the processing pipeline.
+
+### Pydantic Schemas (`schemas.py`)
+
+```python
+class ArticleCreate(BaseModel):
+    title: str
+    content: Optional[str] = None
+    source: str
+    published_time: datetime
+    url: str
+
+class Article(ArticleCreate):
+    id: int
+    sector: Optional[str] = None
+    confidence_score: Optional[float] = None
+    entities: Optional[List[Dict[str, str]]] = None
+    processed: Optional[bool] = False
+    qdrant_point_id: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+```
+
+**Adapter outputs must produce `ArticleCreate`-compatible objects** — 5 fields required: `title`, `source`, `published_time`, `url`, plus optional `content`.
+
+### EntityItem schema
+
+```python
+class EntityItem(BaseModel):
+    text: str
+    category: str  # ORG, LOC, COMMODITY, FINANCIAL_EVENT, etc.
+```
+
+Entities are stored as a JSON list of `{text, category}` dicts in the `entities` column, set by the NER pipeline post-ingestion.

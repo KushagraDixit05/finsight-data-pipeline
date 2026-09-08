@@ -105,3 +105,37 @@ No two rows in `news_articles` ever share a `canonical_url`, a `(source, source_
 ## Dependencies / Next Phase
 
 `08-postgresql-schema.md` implements the constraints this phase specifies.
+
+---
+
+## ⚡ Actual Implementation Note (as-built)
+
+> **The following reflects what is currently implemented in `services.py` and `models.py` and supersedes the layered plan above for the active feature build.**
+
+### Implemented dedup: Level-1 URL match only (application-layer check)
+
+```python
+def store_articles(db: Session, articles: list[schemas.ArticleCreate]) -> int:
+    stored_count = 0
+    for article_data in articles:
+        existing_article = db.query(models.Article).filter(models.Article.url == article_data.url).first()
+        if not existing_article:
+            db_article = models.Article(**article_data.model_dump())
+            db.add(db_article)
+            stored_count += 1
+    db.commit()
+    return stored_count
+```
+
+**What's implemented:**
+- **Level-1 (URL match):** before inserting, query for an existing row with the same `url`. If found, skip silently (no error, no log entry). The `url` column has a `UNIQUE` index in the DB as the enforcement backstop.
+
+**What's not yet implemented:**
+- **Level-2 (source + source_article_id):** not applicable — neither Finnhub nor NewsAPI expose a stable per-article ID that is distinct from the URL.
+- **Level-3 (content_hash):** no `content_hash` column exists on the `articles` table; this level is deferred.
+- **Level-4 (near-duplicate/semantic):** deferred per the original plan.
+- **Ingestion logging:** no `news_ingestion_logs` table or per-run tracking is implemented; duplicate counts are not persisted.
+
+### Schema enforcement
+
+The `articles.url` column carries a `UNIQUE` constraint (via `Column(String, unique=True, index=True)` in the ORM model), which acts as the database-level safety net catching any race conditions the application-level check misses.
