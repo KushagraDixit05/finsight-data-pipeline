@@ -70,6 +70,7 @@ from src.news.adapters.base import (
     AdapterFetchError,
     AdapterRateLimitError,
     ProviderConfig,
+    sanitize_error_msg,
 )
 from src.news.models import NewsArticle, NewsCategory, NewsSource
 
@@ -186,7 +187,8 @@ async def _fetch_page(
     Raises adapter-specific exceptions on HTTP errors so the caller can handle
     them uniformly without inspecting status codes.
     """
-    url = f"{base_url.rstrip('/')}{_ENDPOINT_PATH}"
+    base = base_url if base_url else "https://newsdata.io"
+    url = f"{base.rstrip('/')}{_ENDPOINT_PATH}"
 
     try:
         response = await client.get(url, params=params)
@@ -195,7 +197,8 @@ async def _fetch_page(
             f"NewsData request timed out after {config.timeout_seconds}s"
         ) from exc
     except httpx.RequestError as exc:
-        raise AdapterFetchError(f"NewsData network error: {exc}") from exc
+        err_msg = sanitize_error_msg(str(exc), config)
+        raise AdapterFetchError(f"NewsData network error: {err_msg}") from exc
 
     if response.status_code in (401, 403):
         raise AdapterAuthError(
@@ -208,9 +211,10 @@ async def _fetch_page(
             f"Daily limit: {config.max_articles_per_request} credits/day."
         )
     if response.status_code != 200:
+        err_msg = sanitize_error_msg(response.text[:200], config)
         raise AdapterFetchError(
             f"NewsData returned unexpected status {response.status_code}: "
-            f"{response.text[:200]}"
+            f"{err_msg}"
         )
 
     try:
@@ -280,7 +284,6 @@ async def fetch_and_map(
         "apikey": config.api_key,
         "language": "en",
         "category": "business,politics,world,science,technology",
-        "from_": since_str,
     }
 
     # Two call sets: India-specific + global

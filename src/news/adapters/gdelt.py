@@ -137,16 +137,32 @@ async def _fetch_one_query(
         "sort": "DateDesc",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:
-            response = await client.get(cfg.GDELT_BASE_URL, params=params)
-    except httpx.RequestError as exc:
-        raise AdapterFetchError(f"GDELT: network error for query={keyword!r}: {exc}") from exc
-
-    if response.status_code != 200:
-        raise AdapterFetchError(
-            f"GDELT: unexpected status {response.status_code} for query={keyword!r}"
-        )
+    max_retries = 3
+    base_url = config.base_url if config.base_url else cfg.GDELT_BASE_URL
+    
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:
+                response = await client.get(base_url, params=params)
+                
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    delay = (attempt + 1) * 2.0
+                    log.warning("GDELT: 429 Too Many Requests for query=%r. Retrying in %ss...", keyword[:20], delay)
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    raise AdapterFetchError(f"GDELT: rate limit exceeded after {max_retries} attempts for query={keyword!r}")
+            
+            if response.status_code != 200:
+                raise AdapterFetchError(
+                    f"GDELT: unexpected status {response.status_code} for query={keyword!r}"
+                )
+                
+            break  # Success
+            
+        except httpx.RequestError as exc:
+            raise AdapterFetchError(f"GDELT: network error for query={keyword!r}: {exc}") from exc
 
     # GDELT sometimes returns an empty body or HTML error page
     text = response.text.strip()

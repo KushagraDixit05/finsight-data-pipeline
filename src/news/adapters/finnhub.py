@@ -53,6 +53,7 @@ from src.news.adapters.base import (
     AdapterFetchError,
     AdapterRateLimitError,
     ProviderConfig,
+    sanitize_error_msg,
 )
 from src.news.models import NewsArticle, NewsCategory, NewsSource, SentimentScore
 
@@ -169,7 +170,8 @@ async def fetch_and_map(
     AdapterFetchError
         For all other HTTP errors or network failures.
     """
-    url = f"{config.base_url.rstrip('/')}{_ENDPOINT_PATH}"
+    base = config.base_url if config.base_url else "https://finnhub.io"
+    url = f"{base.rstrip('/')}{_ENDPOINT_PATH}"
     params: dict[str, str | int] = {
         "category": _CATEGORY_PARAM,
         "token": config.api_key,
@@ -186,7 +188,8 @@ async def fetch_and_map(
             f"Finnhub request timed out after {config.timeout_seconds}s"
         ) from exc
     except httpx.RequestError as exc:
-        raise AdapterFetchError(f"Finnhub network error: {exc}") from exc
+        err_msg = sanitize_error_msg(str(exc), config)
+        raise AdapterFetchError(f"Finnhub network error: {err_msg}") from exc
 
     # ── HTTP error handling ───────────────────────────────────────────────────
     if response.status_code in (401, 403):
@@ -200,9 +203,10 @@ async def fetch_and_map(
             f"Limit: {config.max_articles_per_request} calls/min."
         )
     if response.status_code != 200:
+        err_msg = sanitize_error_msg(response.text[:200], config)
         raise AdapterFetchError(
             f"Finnhub returned unexpected status {response.status_code}: "
-            f"{response.text[:200]}"
+            f"{err_msg}"
         )
 
     # ── Parse and map ─────────────────────────────────────────────────────────

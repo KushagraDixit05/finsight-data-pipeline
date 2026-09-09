@@ -90,3 +90,10 @@ class ProviderConfig:
     base_url: str = field(default="")
     timeout_seconds: int = field(default=15)
     max_articles_per_request: int = field(default=15)
+
+
+def sanitize_error_msg(msg: str, config: ProviderConfig) -> str:
+    """Redact the API key from the error message to prevent secrets leakage."""
+    if config.api_key and config.api_key in msg:
+        return msg.replace(config.api_key, "***REDACTED***")
+    return msg

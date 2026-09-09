@@ -43,7 +43,13 @@ from typing import Any
 
 import httpx
 
-from src.news.adapters.base import AdapterAuthError, AdapterFetchError, AdapterRateLimitError, ProviderConfig
+from src.news.adapters.base import (
+    AdapterAuthError,
+    AdapterFetchError,
+    AdapterRateLimitError,
+    ProviderConfig,
+    sanitize_error_msg,
+)
 from src.news.models.enums import NewsCategory, NewsSource
 from src.news.models.news_article import CompanyMention, NewsArticle, SentimentScore
 
@@ -173,18 +179,21 @@ async def fetch_and_map(since: datetime.datetime, config: ProviderConfig) -> lis
         "limit": min(config.max_articles_per_request, 3),  # free tier: 3/request
     }
 
+    base_url = config.base_url if config.base_url else _BASE_URL
     try:
         async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:
-            response = await client.get(_BASE_URL, params=params)
+            response = await client.get(base_url, params=params)
     except httpx.RequestError as exc:
-        raise AdapterFetchError(f"Marketaux: network error: {exc}") from exc
+        err_msg = sanitize_error_msg(str(exc), config)
+        raise AdapterFetchError(f"Marketaux: network error: {err_msg}") from exc
 
     if response.status_code in (401, 403):
         raise AdapterAuthError(f"Marketaux: auth error {response.status_code}")
     if response.status_code == 429:
         raise AdapterRateLimitError("Marketaux: rate limit exceeded (100 req/day)")
     if response.status_code != 200:
-        raise AdapterFetchError(f"Marketaux: unexpected status {response.status_code}: {response.text[:200]}")
+        err_msg = sanitize_error_msg(response.text[:200], config)
+        raise AdapterFetchError(f"Marketaux: unexpected status {response.status_code}: {err_msg}")
 
     try:
         data = response.json()
